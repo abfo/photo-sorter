@@ -16,7 +16,7 @@ namespace PhotoSorter
             Version version = Assembly.GetEntryAssembly().GetName().Version;
 
             Console.WriteLine($"PhotoSorter {version.Major}.{version.Minor:00} by Robert Ellison");
-            Console.WriteLine($"Full instructions at https://ithoughthecamewithyou.com/");
+            Console.WriteLine($"Full instructions at https://ithoughthecamewithyou.com/post/photo-sorter-100");
 
             string sourceFolder;
             string destinationFolder;
