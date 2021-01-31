@@ -69,6 +69,8 @@ namespace PhotoSorter
 
             foreach (FileInfo file in files)
             {
+                if (file.Length == 0) { continue; }
+
                 DateTime dateTaken = GetDateTaken(file.FullName);
                 string dateFolder = dateTaken == DateTime.MinValue ? UnknownDateFolder : dateTaken.ToString("yyyy-MM", CultureInfo.InvariantCulture);
                 string destFolder = Path.Combine(_destinationFolder, dateFolder);

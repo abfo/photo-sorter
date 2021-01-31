@@ -75,7 +75,23 @@ namespace PhotoSorter
             {
                 using (Stream s = File.OpenRead(path))
                 {
-                    byte[] data = md5Hash.ComputeHash(s);
+                    byte[] data = null;
+
+                    string extension = Path.GetExtension(path).ToLowerInvariant();
+                    if ((extension == ".jpg") || (extension == ".jpeg"))
+                    {
+                        try
+                        {
+                            data = md5Hash.ComputeHash(ReadJpegContentOnly(s));
+                        }
+                        catch (Exception) { }
+                    }
+                    
+                    if (data == null)
+                    {
+                        data = md5Hash.ComputeHash(s);
+                    }
+
                     StringBuilder sb = new StringBuilder();
                     for (int i = 0; i < data.Length; i++)
                     {
@@ -86,6 +102,38 @@ namespace PhotoSorter
             }
 
             return hash;
+        }
+
+        // see https://www.media.mit.edu/pia/Research/deepview/exif.html#:~:text=JPEG%20image%20files.-,JPEG%20format%20and%20Marker,period%20of%20JPEG%20information%20data.
+        private static byte[] ReadJpegContentOnly(Stream s)
+        {
+            byte[] jpegContent;
+
+            using (BinaryReader binaryReader = new BinaryReader(s, Encoding.Default, true))
+            {
+                ushort marker = ReadBeWord(binaryReader);
+                if (marker != 0xFFD8) { throw new InvalidOperationException("Not a JPEG"); } // not a jpeg
+
+                while((marker = ReadBeWord(binaryReader)) != 0xFFDA)
+                {
+                    ushort length = ReadBeWord(binaryReader);
+                    length -= 2;
+                    binaryReader.BaseStream.Seek(length, SeekOrigin.Current);
+                }
+
+                int remaining = (int)(s.Length - s.Position);
+                jpegContent = new byte[remaining];
+                binaryReader.Read(jpegContent, 0, remaining);
+            }
+
+            return jpegContent;
+        }
+
+        private static ushort ReadBeWord(BinaryReader binaryReader)
+        {
+            byte b1 = binaryReader.ReadByte();
+            byte b2 = binaryReader.ReadByte();
+            return (ushort)((b1 << 8) | b2);
         }
 
         private void AddFile(string name, string hash, bool save)
