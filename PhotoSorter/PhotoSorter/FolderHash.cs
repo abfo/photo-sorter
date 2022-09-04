@@ -48,6 +48,34 @@ namespace PhotoSorter
             AddFile(name, hash, true);
         }
 
+
+        /// <summary>
+        /// Removes a file by hash if the folder contains it
+        /// </summary>
+        /// <param name="hash">The hash for the file (from GetHashForPath)</param>
+        /// <returns>True if a file was removed</returns>
+        public bool RemoveFile(string hash)
+        {
+            if (string.IsNullOrWhiteSpace(hash)) { throw new ArgumentNullException("hash"); }
+
+            bool removed = false;
+
+            if (_fileHashes.ContainsKey(hash))
+            {
+                string name = _fileHashes[hash];
+                string path = Path.Combine(_folder, name);
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                    _fileHashes.Remove(hash);
+                    Save();
+                    removed = true;
+                }
+            }
+
+            return removed;
+        }
+
         /// <summary>
         /// Checks to see if the folder already contains a file with a given hash
         /// </summary>

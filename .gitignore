@@ -80,3 +80,4 @@ _[Ss]cripts
 *.ide-shm
 *.ide-wal
 /.vs/ITHCWY/config/applicationhost.config
+/PhotoSorter/.vs/PhotoSorter/FileContentIndex

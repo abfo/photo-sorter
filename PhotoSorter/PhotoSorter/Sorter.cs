@@ -1,14 +1,7 @@
-﻿using Shell32;
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
-using System.Linq;
-using System.Text;
-using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 
 namespace PhotoSorter
 {
@@ -22,21 +15,11 @@ namespace PhotoSorter
         private string _destinationFolder;
         private FolderHash _folderHash;
         private string _folderHashFolder;
-        private readonly Regex r = new Regex(":");
 
-        private readonly string[] ShellColumns = new string[] {
-            "Media created",
-            "Date taken"
+        private readonly string[] DoNotMoveExtensions = new string[] {
+            ".json",
+            ".pshashfile"
         };
-
-        private readonly string[] FilenamePatterns = new string[] {
-            "IMG_",
-            "BURST",
-            "IMG-",
-            "GIF_Action_"
-        };
-
-        private const string UnknownDateFolder = "An Unknown Date";
 
         public event EventHandler<SorterLogEventArgs> Log;
 
@@ -62,194 +45,144 @@ namespace PhotoSorter
         /// </summary>
         public void Sort()
         {
-            DirectoryInfo di = new DirectoryInfo(_sourceFolder);
-            FileInfo[] files = di.GetFiles("*.*", SearchOption.AllDirectories);
+            OnLog($"PhotoSorter moving from {_sourceFolder} to {_destinationFolder}.");
 
-            OnLog($"Processing {files.Length:n0} files from {_sourceFolder} to {_destinationFolder}.");
+            Dictionary<string, IList<SourceFile>> sourceFilesByMonth = LoadSourceFiles();
 
-            foreach (FileInfo file in files)
+            foreach (string month in sourceFilesByMonth.Keys)
             {
-                if (file.Length == 0) { continue; }
+                OnLog($"Processing {month}.");
 
-                DateTime dateTaken = GetDateTaken(file.FullName);
-                string dateFolder = dateTaken == DateTime.MinValue ? UnknownDateFolder : dateTaken.ToString("yyyy-MM", CultureInfo.InvariantCulture);
-                string destFolder = Path.Combine(_destinationFolder, dateFolder);
+                string destFolder = Path.Combine(_destinationFolder, month);
 
                 if (!Directory.Exists(destFolder))
                 {
                     Directory.CreateDirectory(destFolder);
                 }
 
-                // load folder hashes if needed
-                if ((_folderHash == null) || (_folderHashFolder != dateFolder))
-                {
-                    _folderHash = new FolderHash(destFolder);
-                    _folderHashFolder = dateFolder;
-                }
+                _folderHash = new FolderHash(destFolder);
+                _folderHashFolder = month;
 
-                // hash the current file
-                string hash = FolderHash.GetHashForPath(file.FullName);
-                if (_folderHash.ContainsHash(hash))
+                // check for any source duplicates in the month
+                IList<SourceFile> files = sourceFilesByMonth[month];
+                CheckForSourceDuplicates(files);
+
+                foreach (SourceFile file in files)
                 {
-                    OnLog($"{file.Name} already exists in {destFolder}, deleting.");
-                    File.Delete(file.FullName);
-                }
-                else
-                {
-                    // make sure we have a unique filename
-                    int unique = 0;
-                    string destfile;
-                    while (true)
+                    if (file.FileInfo.Length == 0) { continue; }
+                    if (file.IsRejectedDuplicate) { continue; }
+
+                    // hash the current file
+                    string hash = FolderHash.GetHashForPath(file.FileInfo.FullName);
+                    if (_folderHash.ContainsHash(hash))
                     {
-                        if (unique == 0)
+                        OnLog($"{file.FileInfo.Name} already exists in {destFolder}, deleting.");
+                        File.Delete(file.FileInfo.FullName);
+                    }
+                    else
+                    {
+                        // make sure we have a unique filename
+                        int unique = 0;
+                        string destfile;
+                        while (true)
                         {
-                            destfile = Path.Combine(destFolder, file.Name);
+                            if (unique == 0)
+                            {
+                                destfile = Path.Combine(destFolder, file.FileInfo.Name);
+                            }
+                            else
+                            {
+                                destfile = Path.Combine(destFolder, string.Format("{0}_{1:0000}{2}", Path.GetFileNameWithoutExtension(file.FileInfo.Name), unique, Path.GetExtension(file.FileInfo.Name)));
+                            }
+                            if (!File.Exists(destfile)) { break; }
+                            unique++;
                         }
+
+                        OnLog($"Moving {file.FileInfo.Name} to {destfile}.");
+
+                        // move the file
+                        File.Move(file.FileInfo.FullName, destfile);
+
+                        // add to the folder hash
+                        _folderHash.AddFile(Path.GetFileName(destfile), hash);
+                    }
+                }
+            }
+        }
+
+        private void CheckForSourceDuplicates(IList<SourceFile> files)
+        {
+            foreach (SourceFile file1 in files)
+            {
+                foreach (SourceFile file2 in files)
+                {
+                    if (file2 == file1) { continue; }
+                    if (file2.DateTaken == DateTime.MinValue) { continue; }
+                    if (!File.Exists(file1.FileInfo.FullName)) { continue; }
+                    if (!File.Exists(file2.FileInfo.FullName)) { continue; }
+
+                    if ((file1.DuplicateCheckFileName == file2.DuplicateCheckFileName)
+                        && (file1.DateTaken == file2.DateTaken))
+                    {
+                        string victim;
+
+                        // kill the smaller file (or the second if thye happen to be the same length
+                        if (file1.FileInfo.Length >= file2.FileInfo.Length)
+                        {
+                            victim = file2.FileInfo.FullName;
+                            file2.IsRejectedDuplicate = true;
+                        } 
                         else
                         {
-                            destfile = Path.Combine(destFolder, string.Format("{0}_{1:0000}{2}", Path.GetFileNameWithoutExtension(file.Name), unique, Path.GetExtension(file.Name)));
+                            victim = file1.FileInfo.FullName;
+                            file1.IsRejectedDuplicate = true;
                         }
-                        if (!File.Exists(destfile)) { break; }
-                        unique++;
-                    }
 
-                    OnLog($"Moving {file.Name} to {destfile}.");
+                        string hash = FolderHash.GetHashForPath(victim);
+                        bool destDeleted = _folderHash.RemoveFile(hash);
 
-                    // move the file
-                    File.Move(file.FullName, destfile);
-
-                    // add to the folder hash
-                    _folderHash.AddFile(Path.GetFileName(destfile), hash);
-                }
-            }
-        }
-
-        private DateTime GetDateTaken(string path)
-        {
-            DateTime taken = DateTime.MinValue;
-
-            // try image proprties first - most likely to work
-            taken = GetDateFromPropertyItem(path);
-            
-            if (taken == DateTime.MinValue)
-            {
-                // try shell columns next...
-                foreach(string column in ShellColumns)
-                {
-                    taken = GetDateFromShellColumn(path, column);
-                    if (taken > DateTime.MinValue) { break; }
-                }
-            }
-
-            if (taken == DateTime.MinValue)
-            {
-                // try some filename patterns
-                foreach(string pattern in FilenamePatterns)
-                {
-                    taken = GetDateFromFilename(path, pattern);
-                    if (taken > DateTime.MinValue) { break; }   
-                }
-            }
-
-            // patch bad video dates... https://feedback.photoshop.com/photoshop_family/topics/mac-lightroom-mp4-creation-date-always-66-years-off
-            if ((taken > DateTime.MinValue) && (taken.Year < 1970))
-            {
-                taken = taken.AddYears(66);
-            }
-
-            return taken;
-        }
-
-        private DateTime GetDateFromPropertyItem(string path)
-        {
-            DateTime date = DateTime.MinValue;
-
-            try
-            {
-                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read))
-                {
-                    using (Image myImage = Image.FromStream(fs, false, false))
-                    {
-                        PropertyItem propItem = myImage.GetPropertyItem(36867);
-                        string dateTaken = r.Replace(Encoding.UTF8.GetString(propItem.Value), "-", 2);
-                        return DateTime.Parse(dateTaken);
+                        OnLog($"{victim} is a duplicate by filename and date taken, deleting (destination duplicate deleted = {destDeleted}).");
+                        File.Delete(victim);
                     }
                 }
             }
-            catch (Exception)
-            {
-                // keep trying...
-            }
-
-            return date;
         }
 
-        private DateTime GetDateFromFilename(string path, string prefix)
+        private Dictionary<string, IList<SourceFile>> LoadSourceFiles()
         {
-            DateTime date = DateTime.MinValue;
+            OnLog("Loading source files...");
 
-            try
+            Dictionary<string, IList<SourceFile>> sourceFilesByMonth = new Dictionary<string, IList<SourceFile>>();
+
+            DirectoryInfo di = new DirectoryInfo(_sourceFolder);
+            FileInfo[] files = di.GetFiles("*.*", SearchOption.AllDirectories);
+
+            foreach (FileInfo file in files)
             {
-                int index = path.IndexOf(prefix);
-                if (index >= 0)
+                bool deleted = false;
+
+                foreach(string extension in DoNotMoveExtensions)
                 {
-                    string year = path.Substring(index + prefix.Length, 4);
-                    string month = path.Substring(index + prefix.Length + 4, 2);
-                    string day = path.Substring(index + prefix.Length + 6, 2);
-                    date = new DateTime(Convert.ToInt32(year), Convert.ToInt32(month), Convert.ToInt32(day));
-                }
-            }
-            catch (Exception )
-            {
-                // keep trying...
-            }
-
-            return date;
-        }
-
-        private static DateTime GetDateFromShellColumn(string path, string column)
-        {
-            // media created, see https://stackoverflow.com/questions/8351713/how-can-i-extract-the-date-from-the-media-created-column-of-a-video-file
-            // also see https://stackoverflow.com/questions/22382010/what-options-are-available-for-shell32-folder-getdetailsof
-            try
-            {
-                Shell shell = new Shell();
-                Folder folder = shell.NameSpace(Path.GetDirectoryName(path));
-
-                // find the right property
-                int mediaCreated = 0;
-                for (int i = 0; i < 0xFFFF; i++)
-                {
-                    string name = folder.GetDetailsOf(null, i);
-                    if (name == column)
+                    if (string.Compare(extension, Path.GetExtension(file.Name), StringComparison.OrdinalIgnoreCase) == 0)
                     {
-                        mediaCreated = i;
+                        OnLog($"{file.FullName} has a do not move extension, deleting.");
+                        File.Delete(file.FullName);
+                        deleted = true;
                         break;
                     }
                 }
 
-                FolderItem file = folder.ParseName(Path.GetFileName(path));
-                string value = folder.GetDetailsOf(file, mediaCreated);
+                if (deleted) { continue; }
 
-                if (!string.IsNullOrWhiteSpace(value))
+                SourceFile sourceFile = new SourceFile(file);
+                if (!sourceFilesByMonth.ContainsKey(sourceFile.DestFolder))
                 {
-                    StringBuilder clean = new StringBuilder();
-                    foreach (char c in value)
-                    {
-                        if (c == (char)8206) { continue; }
-                        if (c == (char)8207) { continue; }
-                        clean.Append(c);
-                    }
-                    value = clean.ToString().Trim();
-                    return DateTime.Parse(value);
+                    sourceFilesByMonth.Add(sourceFile.DestFolder, new List<SourceFile>());
                 }
-            }
-            catch (Exception)
-            {
-                // keep trying
+                sourceFilesByMonth[sourceFile.DestFolder].Add(sourceFile);
             }
 
-            return DateTime.MinValue;
+            return sourceFilesByMonth;
         }
 
         private void OnLog(string logMessage)
